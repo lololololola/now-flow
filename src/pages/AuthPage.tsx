@@ -25,7 +25,9 @@ export default function AuthPage() {
     }
   }, [currentUser, navigate]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
@@ -35,8 +37,10 @@ export default function AuthPage() {
       return;
     }
 
+    setSubmitting(true);
+
     if (mode === "login") {
-      const user = login(username.trim(), password);
+      const user = await login(username.trim(), password);
       if (!user) {
         setError("用户名或密码错误");
       }
@@ -44,16 +48,19 @@ export default function AuthPage() {
     } else {
       if (password.length < 4) {
         setError("密码至少需要4位");
+        setSubmitting(false);
         return;
       }
-      const user = register(username.trim(), password);
+      const user = await register(username.trim(), password);
       if (!user) {
-        setError("用户名已存在");
+        setError("用户名已存在或注册失败");
       } else {
         setSuccess("注册成功！正在跳转...");
         // 注册成功会自动触发 useEffect 跳转
       }
     }
+
+    setSubmitting(false);
   };
 
   return (
@@ -112,8 +119,10 @@ export default function AuthPage() {
               </div>
             )}
 
-            <Button type="submit" className="w-full">
-              {mode === "login" ? (
+            <Button type="submit" className="w-full" disabled={submitting}>
+              {submitting ? (
+                "处理中..."
+              ) : mode === "login" ? (
                 <>
                   <LogIn className="h-4 w-4" />
                   登录

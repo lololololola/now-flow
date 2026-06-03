@@ -8,7 +8,7 @@ import type { TimeEntry } from "@/types/nowFlow";
 import { categoryColorVar } from "@/utils/category";
 import { addMinutes, dateKeyOf, minutesBetween, startOfDay } from "@/utils/time";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function floorToSlot(date: Date, granularityMinutes: number) {
   const dayStart = startOfDay(date);
@@ -51,6 +51,14 @@ export default function LogPage() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetSlot, setSheetSlot] = useState<{ start: Date; end: Date } | null>(null);
   const [sheetEntry, setSheetEntry] = useState<TimeEntry | null>(null);
+
+  const loadTimeEntries = useNowFlowStore((s) => s.loadTimeEntries);
+  const loadActivities = useNowFlowStore((s) => s.loadActivities);
+
+  useEffect(() => {
+    loadTimeEntries();
+    loadActivities();
+  }, [loadTimeEntries, loadActivities]);
 
   const openSheet = (slot: { start: Date; end: Date }, entry: TimeEntry | null = null) => {
     setSheetSlot(slot);

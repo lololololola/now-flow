@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { supabase } from "@/lib/supabase";
 import type {
   Activity,
   DailyReview,
@@ -15,7 +15,6 @@ import type {
   TimeEntryOverlay,
 } from "@/types/nowFlow";
 import { createId, dateKeyOf, nowIso } from "@/utils/time";
-import { useAuthStore } from "./authStore";
 
 type CreateTimeEntryInput = {
   dateKey: string;
@@ -38,12 +37,13 @@ type NowFlowState = {
   ifThenRules: IfThenRule[];
   smallWins: SmallWin[];
   settings: Settings;
+  loading: boolean;
 
-  createTimeEntry: (input: CreateTimeEntryInput) => TimeEntry;
-  updateTimeEntry: (id: string, input: Partial<CreateTimeEntryInput>) => TimeEntry | null;
-  deleteTimeEntry: (id: string) => void;
+  createTimeEntry: (input: CreateTimeEntryInput) => Promise<TimeEntry | null>;
+  updateTimeEntry: (id: string, input: Partial<CreateTimeEntryInput>) => Promise<TimeEntry | null>;
+  deleteTimeEntry: (id: string) => Promise<void>;
 
-  upsertDailyReview: (input: Omit<DailyReview, "id" | "createdAt" | "updatedAt"> & { id?: string }) => DailyReview;
+  upsertDailyReview: (input: Omit<DailyReview, "id" | "createdAt" | "updatedAt"> & { id?: string }) => Promise<DailyReview | null>;
 
   createIfThenRule: (input: { ifTrigger: string; thenAction: string; scene: IfThenRule["scene"] }) => IfThenRule;
   toggleIfThenRule: (id: string) => void;
@@ -51,6 +51,8 @@ type NowFlowState = {
   createSmallWin: (input: { dateKey: string; text: string; taskId?: string | null; focusSessionId?: string | null; mood?: MoodType | null }) => SmallWin;
 
   setSettings: (patch: Partial<Settings>) => void;
+  loadTimeEntries: () => Promise<void>;
+  loadActivities: () => Promise<void>;
 };
 
 function defaultActivities(): Activity[] {
@@ -81,168 +83,249 @@ const defaultSettings: Settings = {
   energyMinMinutes3d: 60,
 };
 
-function getUserStorageKey(): string {
-  const userId = useAuthStore.getState().currentUser?.id;
-  return userId ? `now-flow-${userId}` : "now-flow-guest";
-}
+export const useNowFlowStore = create<NowFlowState>((set, get) => ({
+  activities: defaultActivities(),
+  timeEntries: [],
+  tasks: [],
+  focusSessions: [],
+  dailyReviews: [],
+  ifThenRules: [],
+  smallWins: [],
+  settings: defaultSettings,
+  loading: false,
 
-export const useNowFlowStore = create<NowFlowState>()(
-  persist(
-    (set, get) => ({
-      activities: defaultActivities(),
-      timeEntries: [],
-      tasks: [],
-      focusSessions: [],
-      dailyReviews: [],
-      ifThenRules: [],
-      smallWins: [],
-      settings: defaultSettings,
+  loadTimeEntries: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    set({ loading: true });
+    const { data, error } = await supabase
+      .from("time_entries")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+    if (!error && data) {
+      const entries: TimeEntry[] = data.map((row) => ({
+        id: row.id,
+        dateKey: row.date_key,
+        startAt: row.start_at,
+        endAt: row.end_at,
+        primaryCategory: row.primary_category as NowCategory,
+        primaryActivityId: row.primary_activity_id,
+        overlays: row.overlays as TimeEntryOverlay[],
+        mood: row.mood as MoodType | null,
+        interruptionType: row.interruption_type as InterruptionType | null,
+        note: row.note,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
+      set({ timeEntries: entries, loading: false });
+    } else {
+      set({ loading: false });
+    }
+  },
 
-      createTimeEntry: (input) => {
-        const now = nowIso();
-        const entry: TimeEntry = {
-          id: createId("te"),
-          dateKey: input.dateKey,
-          startAt: input.startAt,
-          endAt: input.endAt,
-          primaryCategory: input.primaryCategory,
-          primaryActivityId: input.primaryActivityId,
-          overlays: input.overlays,
-          mood: input.mood,
-          interruptionType: input.interruptionType,
-          note: input.note,
-          createdAt: now,
-          updatedAt: now,
-        };
-        set({ timeEntries: [entry, ...get().timeEntries] });
-        return entry;
-      },
+  loadActivities: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data, error } = await supabase
+      .from("activities")
+      .select("*")
+      .eq("user_id", user.id);
+    if (!error && data && data.length > 0) {
+      const acts: Activity[] = data.map((row) => ({
+        id: row.id,
+        category: row.category as NowCategory,
+        name: row.name,
+        archived: row.archived,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
+      set({ activities: acts });
+    }
+  },
 
-      updateTimeEntry: (id, input) => {
-        const existing = get().timeEntries.find((e) => e.id === id);
-        if (!existing) return null;
-        const updated: TimeEntry = {
-          ...existing,
-          ...(input.dateKey !== undefined && { dateKey: input.dateKey }),
-          ...(input.startAt !== undefined && { startAt: input.startAt }),
-          ...(input.endAt !== undefined && { endAt: input.endAt }),
-          ...(input.primaryCategory !== undefined && { primaryCategory: input.primaryCategory }),
-          ...(input.primaryActivityId !== undefined && { primaryActivityId: input.primaryActivityId }),
-          ...(input.overlays !== undefined && { overlays: input.overlays }),
-          ...(input.mood !== undefined && { mood: input.mood }),
-          ...(input.interruptionType !== undefined && { interruptionType: input.interruptionType }),
-          ...(input.note !== undefined && { note: input.note }),
-          updatedAt: nowIso(),
-        };
-        set({ timeEntries: get().timeEntries.map((e) => (e.id === id ? updated : e)) });
-        return updated;
-      },
+  createTimeEntry: async (input) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
 
-      deleteTimeEntry: (id) => {
-        set({ timeEntries: get().timeEntries.filter((e) => e.id !== id) });
-      },
+    const now = nowIso();
+    const entry: TimeEntry = {
+      id: createId("te"),
+      dateKey: input.dateKey,
+      startAt: input.startAt,
+      endAt: input.endAt,
+      primaryCategory: input.primaryCategory,
+      primaryActivityId: input.primaryActivityId,
+      overlays: input.overlays,
+      mood: input.mood,
+      interruptionType: input.interruptionType,
+      note: input.note,
+      createdAt: now,
+      updatedAt: now,
+    };
 
-      upsertDailyReview: (input) => {
-        const now = nowIso();
-        const existing = input.id ? get().dailyReviews.find((r) => r.id === input.id) : null;
-        const review: DailyReview = {
-          id: existing?.id ?? createId("dr"),
-          dateKey: input.dateKey,
-          reflectionText: input.reflectionText,
-          frog1: input.frog1,
-          frog2: input.frog2,
-          frog3: input.frog3,
-          energyPlan: input.energyPlan,
-          sleepTargetHours: input.sleepTargetHours,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        };
-        const rest = get().dailyReviews.filter((r) => r.id !== review.id);
-        set({ dailyReviews: [review, ...rest] });
-        return review;
-      },
+    const { error } = await supabase.from("time_entries").insert({
+      id: entry.id,
+      user_id: user.id,
+      date_key: entry.dateKey,
+      start_at: entry.startAt,
+      end_at: entry.endAt,
+      primary_category: entry.primaryCategory,
+      primary_activity_id: entry.primaryActivityId,
+      overlays: entry.overlays,
+      mood: entry.mood,
+      interruption_type: entry.interruptionType,
+      note: entry.note,
+    });
 
-      createIfThenRule: (input) => {
-        const now = nowIso();
-        const rule: IfThenRule = {
-          id: createId("it"),
-          ifTrigger: input.ifTrigger.trim(),
-          thenAction: input.thenAction.trim(),
-          scene: input.scene,
-          enabled: true,
-          createdAt: now,
-          updatedAt: now,
-        };
-        set({ ifThenRules: [rule, ...get().ifThenRules] });
-        return rule;
-      },
+    if (error) {
+      console.error("createTimeEntry error:", error);
+      return null;
+    }
 
-      toggleIfThenRule: (id) => {
-        set({
-          ifThenRules: get().ifThenRules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled, updatedAt: nowIso() } : r)),
-        });
-      },
+    set({ timeEntries: [entry, ...get().timeEntries] });
+    return entry;
+  },
 
-      createSmallWin: (input) => {
-        const now = nowIso();
-        const win: SmallWin = {
-          id: createId("sw"),
-          dateKey: input.dateKey,
-          text: input.text.trim(),
-          taskId: input.taskId ?? null,
-          focusSessionId: input.focusSessionId ?? null,
-          mood: input.mood ?? null,
-          createdAt: now,
-        };
-        set({ smallWins: [win, ...get().smallWins] });
-        return win;
-      },
+  updateTimeEntry: async (id, input) => {
+    const existing = get().timeEntries.find((e) => e.id === id);
+    if (!existing) return null;
 
-      setSettings: (patch) => set({ settings: { ...get().settings, ...patch } }),
-    }),
-    {
-      name: "now-flow-dynamic",
-      version: 1,
-      storage: createJSONStorage(() => ({
-        getItem: (name) => {
-          const key = getUserStorageKey();
-          return localStorage.getItem(`${name}:${key}`);
-        },
-        setItem: (name, value) => {
-          const key = getUserStorageKey();
-          localStorage.setItem(`${name}:${key}`, value);
-        },
-        removeItem: (name) => {
-          const key = getUserStorageKey();
-          localStorage.removeItem(`${name}:${key}`);
-        },
-      })),
-      partialize: (state) => ({
-        activities: state.activities,
-        timeEntries: state.timeEntries,
-        tasks: state.tasks,
-        focusSessions: state.focusSessions,
-        dailyReviews: state.dailyReviews,
-        ifThenRules: state.ifThenRules,
-        smallWins: state.smallWins,
-        settings: state.settings,
-      }),
-      migrate: (persistedState) => {
-        const state = persistedState as Partial<NowFlowState> | undefined;
-        return {
-          activities: state?.activities?.length ? state.activities : defaultActivities(),
-          timeEntries: state?.timeEntries ?? [],
-          tasks: state?.tasks ?? [],
-          focusSessions: state?.focusSessions ?? [],
-          dailyReviews: state?.dailyReviews ?? [],
-          ifThenRules: state?.ifThenRules ?? [],
-          smallWins: state?.smallWins ?? [],
-          settings: state?.settings ?? defaultSettings,
-        };
-      },
-    },
-  ),
-);
+    const updated: TimeEntry = {
+      ...existing,
+      ...(input.dateKey !== undefined && { dateKey: input.dateKey }),
+      ...(input.startAt !== undefined && { startAt: input.startAt }),
+      ...(input.endAt !== undefined && { endAt: input.endAt }),
+      ...(input.primaryCategory !== undefined && { primaryCategory: input.primaryCategory }),
+      ...(input.primaryActivityId !== undefined && { primaryActivityId: input.primaryActivityId }),
+      ...(input.overlays !== undefined && { overlays: input.overlays }),
+      ...(input.mood !== undefined && { mood: input.mood }),
+      ...(input.interruptionType !== undefined && { interruptionType: input.interruptionType }),
+      ...(input.note !== undefined && { note: input.note }),
+      updatedAt: nowIso(),
+    };
+
+    const { error } = await supabase
+      .from("time_entries")
+      .update({
+        date_key: updated.dateKey,
+        start_at: updated.startAt,
+        end_at: updated.endAt,
+        primary_category: updated.primaryCategory,
+        primary_activity_id: updated.primaryActivityId,
+        overlays: updated.overlays,
+        mood: updated.mood,
+        interruption_type: updated.interruptionType,
+        note: updated.note,
+        updated_at: updated.updatedAt,
+      })
+      .eq("id", id);
+
+    if (error) {
+      console.error("updateTimeEntry error:", error);
+      return null;
+    }
+
+    set({ timeEntries: get().timeEntries.map((e) => (e.id === id ? updated : e)) });
+    return updated;
+  },
+
+  deleteTimeEntry: async (id) => {
+    const { error } = await supabase.from("time_entries").delete().eq("id", id);
+    if (error) {
+      console.error("deleteTimeEntry error:", error);
+      return;
+    }
+    set({ timeEntries: get().timeEntries.filter((e) => e.id !== id) });
+  },
+
+  upsertDailyReview: async (input) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const now = nowIso();
+    const existing = input.id ? get().dailyReviews.find((r) => r.id === input.id) : null;
+    const review: DailyReview = {
+      id: existing?.id ?? createId("dr"),
+      dateKey: input.dateKey,
+      reflectionText: input.reflectionText,
+      frog1: input.frog1,
+      frog2: input.frog2,
+      frog3: input.frog3,
+      energyPlan: input.energyPlan,
+      sleepTargetHours: input.sleepTargetHours,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    if (existing) {
+      await supabase.from("daily_reviews").update({
+        date_key: review.dateKey,
+        reflection_text: review.reflectionText,
+        frog1: review.frog1,
+        frog2: review.frog2,
+        frog3: review.frog3,
+        energy_plan: review.energyPlan,
+        sleep_target_hours: review.sleepTargetHours,
+        updated_at: review.updatedAt,
+      }).eq("id", review.id);
+    } else {
+      await supabase.from("daily_reviews").insert({
+        id: review.id,
+        user_id: user.id,
+        date_key: review.dateKey,
+        reflection_text: review.reflectionText,
+        frog1: review.frog1,
+        frog2: review.frog2,
+        frog3: review.frog3,
+        energy_plan: review.energyPlan,
+        sleep_target_hours: review.sleepTargetHours,
+      });
+    }
+
+    const rest = get().dailyReviews.filter((r) => r.id !== review.id);
+    set({ dailyReviews: [review, ...rest] });
+    return review;
+  },
+
+  createIfThenRule: (input) => {
+    const now = nowIso();
+    const rule: IfThenRule = {
+      id: createId("it"),
+      ifTrigger: input.ifTrigger.trim(),
+      thenAction: input.thenAction.trim(),
+      scene: input.scene,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    set({ ifThenRules: [rule, ...get().ifThenRules] });
+    return rule;
+  },
+
+  toggleIfThenRule: (id) => {
+    set({
+      ifThenRules: get().ifThenRules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled, updatedAt: nowIso() } : r)),
+    });
+  },
+
+  createSmallWin: (input) => {
+    const now = nowIso();
+    const win: SmallWin = {
+      id: createId("sw"),
+      dateKey: input.dateKey,
+      text: input.text.trim(),
+      taskId: input.taskId ?? null,
+      focusSessionId: input.focusSessionId ?? null,
+      mood: input.mood ?? null,
+      createdAt: now,
+    };
+    set({ smallWins: [win, ...get().smallWins] });
+    return win;
+  },
+
+  setSettings: (patch) => set({ settings: { ...get().settings, ...patch } }),
+}));
 
 export function useTodayKey() {
   return dateKeyOf(new Date());
