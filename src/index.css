@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", "Segoe UI", Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --basis: #22c55e;
+  --energy: #f59e0b;
+  --creation: #ef4444;
+}
+
+.light {
+  --bg: #f8fafc;
+  --fg: #0b1220;
+  --muted: rgba(11, 18, 32, 0.55);
+  --panel: rgba(255, 255, 255, 0.72);
+  --card: rgba(255, 255, 255, 0.9);
+  --stroke: rgba(11, 18, 32, 0.12);
+}
+
+.dark {
+  --bg: #070a10;
+  --fg: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.56);
+  --panel: rgba(15, 19, 33, 0.7);
+  --card: rgba(15, 19, 33, 0.88);
+  --stroke: rgba(255, 255, 255, 0.12);
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+}
